@@ -78,7 +78,7 @@ class QM93D(InMemoryDataset):
 
         super(QM93D, self).__init__(self.folder, transform, pre_transform, pre_filter)
 
-        # self.processed_paths[0] = './data/GEOM/QM9'
+        self.processed_paths[0] = './data/QM9.qm9'
         self.data, self.slices = torch.load(self.processed_paths[0])
 
     @property
@@ -103,7 +103,7 @@ class QM93D(InMemoryDataset):
                 p_threshold = 91
             else:
                 raise Exception('Wrong condition name')
-        raw_dir = './qm9/temp/qm9'
+        raw_dir = './data/QM9/qm9/raw'
         data = np.load(osp.join(raw_dir, self.raw_file_names))
 
         R = data['positions']

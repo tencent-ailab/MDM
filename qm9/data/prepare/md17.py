@@ -5,7 +5,7 @@ from os.path import join as join
 import numpy as np
 import torch
 
-from qm9.data.prepare.utils import download_data, cleanup_file
+from utils import download_data, cleanup_file
 
 MD17_BASE_URL = 'http://quantum-machine.org/gdml/data/npz/'
 

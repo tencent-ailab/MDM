@@ -1,7 +1,8 @@
 from .egnn import *
 from .gin import *
 from .schnet import *
-from .spherenet import *
+from .edge import *
+# from .spherenet import *
 
 
 def get_encoder(config):

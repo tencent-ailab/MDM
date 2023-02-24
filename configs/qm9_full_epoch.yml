@@ -1,6 +1,6 @@
 model:
   type: diffusion # dsm and diffusion
-  network: mdm_full_ddpm
+  network: MDMFullDP
   hidden_dim: 256
   num_convs: 6
   num_convs_local: 6

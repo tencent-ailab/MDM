@@ -1,8 +1,8 @@
 import logging
 import os
 
-from qm9.data.prepare.md17 import download_dataset_md17
-from qm9.data.prepare.qm9 import download_dataset_qm9
+from md17 import download_dataset_md17
+from qm9 import download_dataset_qm9
 
 
 def prepare_dataset(datadir, dataset, subset=None, splits=None, cleanup=True, force_download=False):
@@ -82,4 +82,4 @@ def prepare_dataset(datadir, dataset, subset=None, splits=None, cleanup=True, fo
 
 
 if __name__ == '__main__':
-    prepare_dataset('../../../data/qm9/', 'qm9')
+    prepare_dataset('../../../data/QM9/qm9/raw', 'qm9')

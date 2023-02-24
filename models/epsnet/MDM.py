@@ -308,7 +308,7 @@ class MDMFullDP(nn.Module):
         """
         Invariant features of edges (radius graph, global)
         """
-        dist_score_global = self.grad_global_dist_mlp(h_pair_global) * (1.0 / sigma_edge)  # (E_global, 1)
+        dist_score_global = self.grad_global_dist_mlp(h_pair_global) # (E_global, 1)
 
         """
         Encoding local
