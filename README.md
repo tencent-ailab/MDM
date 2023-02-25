@@ -1,5 +1,5 @@
 # MDM: Molecular Diffusion Model for 3D Molecule Generation
-<img src="./overview.png" width="400">
+<img src="./overview.png" width="1000">
 
 
 [[Paper](https://arxiv.org/abs/2209.05710)]
