@@ -1,4 +1,8 @@
 # MDM: Molecular Diffusion Model for 3D Molecule Generation
+<img src="./overview.png" width="400">
+
+
+[[Paper](https://arxiv.org/abs/2209.05710)]
 
 ## Dependencies
 
@@ -55,4 +59,15 @@ python train.py --config './configs/geom_full.yml'
 
 ```bash
 python test_eval.py --ckpt <checkpoint> --sampling_type <sampling type> --w_global_pos 1 -- w_global_node 1 --w_local_pos 4 --w_local_node 5
+```
+
+## Citation
+
+```
+@article{huang2022mdm,
+  title={MDM: Molecular Diffusion Model for 3D Molecule Generation},
+  author={Huang, Lei and Zhang, Hengtong and Xu, Tingyang and Wong, Ka-Chun},
+  journal={arXiv preprint arXiv:2209.05710},
+  year={2022}
+}
 ```
