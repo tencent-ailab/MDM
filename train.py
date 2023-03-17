@@ -19,8 +19,8 @@ from utils.misc import *
 from utils.transforms import *
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', type=str, default='crossdock',
-                    help='crossdock, pdbind')
+parser.add_argument('--dataset', type=str, default='qm9',
+                    help='qm9, geom')
 parser.add_argument('--config', type=str)
 parser.add_argument('--cuda', type=bool, default=True)
 parser.add_argument('--use_mixed_precision', type=bool, default=False)
