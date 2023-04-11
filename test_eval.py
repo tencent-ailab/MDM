@@ -70,7 +70,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # Load checkpoint
-    args.ckpt = './logs/qm9_global_ddpm_dist_resignal_dist_dsm_2022_11_04__21_45_24/checkpoints/300.pt'
+
     ckpt = torch.load(args.ckpt)
     args.dataset = 'qm9' if 'qm9' in args.ckpt else 'geom'
     config = ckpt['config']
@@ -78,7 +78,6 @@ if __name__ == '__main__':
     seed_all(args.seed)  # config.train.seed 3407 11 2021
     log_dir = os.path.dirname(os.path.dirname(args.ckpt))
 
-    args.sampling_type = 'ddpm_noisy'
     args.eta = 1
     # args.global_start_sigma = 1 # float('inf')
     # args.local_start_sigma = 1
