@@ -103,7 +103,7 @@ if __name__ == '__main__':
     output_dir = get_new_log_dir(
         log_dir,
         args.sampling_type + "_{}_sigma{}_build_all_bonds_".format(args.seed, args.global_start_sigma) + tag,
-        tag=args.tag
+        tag=tag
     )
     logger = get_logger('test', output_dir)
     logger.info(args)
