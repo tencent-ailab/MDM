@@ -61,37 +61,37 @@ def compute_geom_smiles(file, index, remove_h=False):
 
     return mols_smiles
 
-# data = compute_qm9_smiles('/apdcephfs/private_layneyhuang/MDM/data/GEOM/QM9/test_data_1k.pkl')
+# data = compute_qm9_smiles('./data/GEOM/QM9/test_data_1k.pkl')
 # print(data)
 def retrieve_qm9_smiles():
-    file_name = '/apdcephfs/private_layneyhuang/qm9/temp/qm9_smiles.pickle'
+    file_name = '../qm9/temp/qm9_smiles.pickle'
     try:
         with open(file_name, 'rb') as f:
             qm9_smiles = pickle.load(f)
         return qm9_smiles
     except OSError:
         # try:
-        #     os.makedirs('/apdcephfs/private_layneyhuang/MDM/data/GEOM')
+        #     os.makedirs('./data/GEOM')
         # except:
         #     pass
-        qm9_smiles = compute_qm9_smiles('/apdcephfs/private_layneyhuang/MDM/data/GEOM/QM9/train_data_40k.pkl')
+        qm9_smiles = compute_qm9_smiles('./data/GEOM/QM9/train_data_40k.pkl')
         with open(file_name, 'wb') as f:
             pickle.dump(qm9_smiles, f)
         return qm9_smiles
 
 def retrieve_geom_smiles():
-    file_name = '/apdcephfs/private_layneyhuang/MDM/data/GEOM/Drugs/geom_smiles.pickle'
+    file_name = './data/GEOM/Drugs/geom_smiles.pickle'
     try:
         with open(file_name, 'rb') as f:
             qm9_smiles = pickle.load(f)
         return qm9_smiles
     except OSError:
         # try:
-        #     os.makedirs('/apdcephfs/private_layneyhuang/MDM/data/GEOM')
+        #     os.makedirs('./data/GEOM')
         # except:
         #     pass
-        file = '/apdcephfs/private_layneyhuang/MDM/data/GEOM/Drugs/geom/geom_drugs_1.npy'
-        index = '/apdcephfs/private_layneyhuang/MDM/data/GEOM/Drugs/geom/geom_drugs_n_1.npy'
+        file = './data/GEOM/Drugs/geom/geom_drugs_1.npy'
+        index = './data/GEOM/Drugs/geom/geom_drugs_n_1.npy'
         qm9_smiles = compute_geom_smiles(file, index)
         with open(file_name, 'wb') as f:
             pickle.dump(qm9_smiles, f)
