@@ -58,7 +58,7 @@ python train.py --config './configs/geom_full.yml'
 ## Sampling and evaluation
 
 ```bash
-python test_eval.py --ckpt <checkpoint> --sampling_type <sampling type> --w_global_pos 1 -- w_global_node 1 --w_local_pos 4 --w_local_node 5
+python test_eval.py --ckpt <checkpoint> --sampling_type generalized --w_global_pos 1 -- w_global_node 1 --w_local_pos 4 --w_local_node 5
 ```
 
 ## Citation
