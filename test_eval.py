@@ -58,9 +58,9 @@ if __name__ == '__main__':
                         help='weight for global pos gradients')
     parser.add_argument('--w_local_pos', type=float, default=1.0,
                         help='weight for local pos gradients')
-    parser.add_argument('--w_global_node', type=float, default=1.0,
+    parser.add_argument('--w_global_node', type=float, default=4.0,
                         help='weight for global node gradients')
-    parser.add_argument('--w_local_node', type=float, default=1.0,
+    parser.add_argument('--w_local_node', type=float, default=5.0,
                         help='weight for local node gradients')
     # Parameters for DDPM
     parser.add_argument('--sampling_type', type=str, default='generalized',
@@ -78,15 +78,10 @@ if __name__ == '__main__':
     seed_all(args.seed)  # config.train.seed 3407 11 2021
     log_dir = os.path.dirname(os.path.dirname(args.ckpt))
 
-    args.eta = 1
     # args.global_start_sigma = 1 # float('inf')
     # args.local_start_sigma = 1
     args.n_steps = ckpt['config'].model.num_diffusion_timesteps
 
-    args.w_global_pos = 1
-    args.w_global_node = 1
-    args.w_local_pos = 1
-    args.w_local_node = 1
 
     # data_list
     dataset_info = get_dataset_info(args.dataset, False)
