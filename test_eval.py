@@ -141,7 +141,7 @@ if __name__ == '__main__':
             context = None
             start_time = time.time()
             batch = Batch.from_data_list(datas).to(args.device)
-
+            FINISHED = True
             while FINISHED:
                 try:
                     pos_gen, pos_gen_traj, atom_type, atom_traj = model.langevin_dynamics_sample(
