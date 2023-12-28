@@ -24,7 +24,6 @@ from configs.datasets_config import get_dataset_info
 # Conditioned training file
 # ------------------------------------------------------------------------------
 if __name__ == '__main__':
-    os.chdir('MDM/')
     print(os.getcwd())
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str)
@@ -39,7 +38,7 @@ if __name__ == '__main__':
                     help='arguments : alpha | gap' )
     args = parser.parse_args()
 
-    args.config = 'MDM/configs/qm9_full.yml'
+    args.config = 'configs/qm9_full.yml'
     resume = os.path.isdir(args.config)
     if resume:
         config_path = glob(os.path.join(args.config, '*.yml'))[0]
