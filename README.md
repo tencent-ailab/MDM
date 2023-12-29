@@ -31,6 +31,8 @@ Download the dataset and split it.
 python ./qm9/data/prepare/download.py
 ```
 
+You can also download the data from https://drive.google.com/file/d/1JZ_Z5bjS0RsX_BRWtrplMN9vZpL78-T7/view?usp=drive_link and put it under data/QM9/qm9/raw. 
+
 ### Geom dataset
 
 1. Download the file at https://dataverse.harvard.edu/file.xhtml?fileId=4360331&version=2.0   (Warning: 50gb):
