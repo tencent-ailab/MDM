@@ -28,6 +28,7 @@ conda activate MDM
 Download the dataset and split it.
 
 ```bash
+cd ./qm9/data/prepare/
 python ./qm9/data/prepare/download.py
 ```
 
