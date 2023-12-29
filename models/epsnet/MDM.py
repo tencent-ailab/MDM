@@ -564,8 +564,8 @@ class MDMFullDP(nn.Module):
                     edge_inv_global, edge_inv_local, node_score_global, node_score_local, \
                     edge_index, _, edge_length, local_edge_mask = net_out
                 # Local float('inf')
-                import random
-                local_start_sigma = random.uniform(0.1, 1)
+                # import random
+                # local_start_sigma = random.uniform(0.1, 1)
                 if sigmas[i] < local_start_sigma:
                     node_eq_local = eq_transform(edge_inv_local, pos, edge_index[:, local_edge_mask],
                                                  edge_length[local_edge_mask])
