@@ -220,8 +220,8 @@ if __name__ == '__main__':
 
     if len(args.context) > 0:
         print(f'Conditioning on {args.context}')
-        property_norms = compute_mean_mad(train_set, args.context, args.dataset)
-        property_norms_val = compute_mean_mad(val_set, args.context, args.dataset)
+        property_norms = compute_mean_mad(train_loader, args.context, args.dataset)
+        property_norms_val = compute_mean_mad(val_loader, args.context, args.dataset)
     else:
         property_norms = None
         context = None
