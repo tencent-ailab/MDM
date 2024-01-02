@@ -4,10 +4,14 @@ import argparse
 import json
 import pickle
 
-sys.path.append(os.path.abspath(os.path.join('../../')))
+# sys.path.append(os.path.abspath(os.path.join('../../')))
 import torch
 from torch import nn, optim
 
+# sys.path.append('..')
+
+    # sys.path.append('..')
+sys.path.append(os.path.abspath(os.path.join('../../')))
 from qm9 import dataset, utils
 from qm9.property_prediction import prop_utils
 from qm9.property_prediction.models_property import EGNN, Naive, NumNodes
@@ -162,7 +166,7 @@ if __name__ == "__main__":
                         help='maximum power to take into one-hot features')
     parser.add_argument('--dataset', type=str, default="qm9_first_half", metavar='N',
                         help='qm9_first_half')
-    parser.add_argument('--datadir', type=str, default="../../qm9/temp", metavar='N',
+    parser.add_argument('--datadir', type=str, default="../../data/QM9/qm9/raw", metavar='N',
                         help='qm9_first_half')
     parser.add_argument('--remove_h', action='store_true')
     parser.add_argument('--include_charges', type=eval, default=True, help='include atom charge or not')
@@ -176,12 +180,14 @@ if __name__ == "__main__":
                         help='egnn | naive | numnodes')
     parser.add_argument('--save_model', type=eval, default=True)
 
+    
     args = parser.parse_args()
     args.cuda = not args.no_cuda and torch.cuda.is_available()
     device = torch.device("cuda" if args.cuda else "cpu")
     dtype = torch.float32
     args.device = device
-    print(args)
+
+
 
     res = {'epochs': [], 'losess': [], 'best_val': 1e10, 'best_test': 1e10, 'best_epoch': 0}
 
