@@ -1,82 +1,233 @@
+import os
 import argparse
-import math
+import pickle
+from random import sample
+import yaml
+import torch
+from glob import glob
+from tqdm.auto import tqdm
+from easydict import EasyDict
 from statistics import mean
+from os.path import join
 
-from eval import retrieve_qm9_smiles, analyze_stability_for_molecules, retrieve_geom_smiles, compute_prop
-from torch_geometric.data import DataLoader
-
-from configs.datasets_config import get_dataset_info
 from models.epsnet import *
-from qm9.utils import compute_mean_mad
 from utils.datasets import *
-from utils.misc import *
-from utils.reconstruct import *
-from utils.sample import *
 from utils.transforms import *
-
-
+from utils.misc import *
+from utils.chem import *
+import time
+from eval import retrieve_qm9_smiles, analyze_stability_for_molecules, PropOptEvaluator, diversity, retrieve_geom_smiles
 # from utils.reconstruct import *
 
+from rdkit.Chem.rdmolfiles import  MolToPDBFile
+from rdkit.Chem.AllChem import EmbedMolecule
 
-def RMSD(probe, ref):
-    rmsd = 0.0
-    # print(amap)
-    assert len(probe) == len(ref)
-    atom_num = len(probe)
-    for i in range(len(probe)):
-        posp = probe[i]
-        posf = ref[i]
-        rmsd += dist_2(posp, posf)
-    rmsd = math.sqrt(rmsd / atom_num)
-    return rmsd
+from configs.datasets_config import get_dataset_info
+from qm9.models import DistributionNodes
+from qm9.property_prediction.main_qm9_prop import test
+from qm9.property_prediction.main_qm9_prop import get_model as get_cls_model
+from qm9.utils import prepare_context, compute_mean_mad
+from utils.sample import *
+from utils.reconstruct import *
+from utils.datasets import QM93D
+
+from collections import Counter
+from torch_geometric.data import DataLoader
 
 
-def dist_2(atoma_xyz, atomb_xyz):
-    dis2 = 0.0
-    for i, j in zip(atoma_xyz, atomb_xyz):
-        dis2 += (i - j) ** 2
-    return dis2
+def get_classifier(dir_path='', device='cpu'):
+    with open(join(dir_path, 'args.pickle'), 'rb') as f:
+        args_classifier = pickle.load(f)
+    args_classifier.device = device
+    args_classifier.model_name = 'egnn'
+    classifier = get_cls_model(args_classifier)
+    classifier_state_dict = torch.load(join(dir_path, 'best_checkpoint.npy'), map_location=torch.device('cpu'))
+    classifier.load_state_dict(classifier_state_dict)
+
+    return classifier
+
+def padding(data_list, max_nodes):
+    padding_list = []
+    for data in data_list:
+        if data.size(0)<max_nodes:
+            padding_data = torch.cat([data,torch.zeros(max_nodes-data.size(0), data.size(1)).to(data.device)],dim=0)
+        padding_list.append(padding_data)
+    return torch.stack(padding_list)
+        
+def sample(args, device, model, dataset_info, prop_dist, nodesxsample, context):
+    max_n_nodes = dataset_info['max_n_nodes']  # this is the maximum node_size in QM9
+
+    assert int(torch.max(nodesxsample)) <= max_n_nodes
+    batch_size = len(nodesxsample)
+
+    node_mask = torch.zeros(batch_size, max_n_nodes)
+    for i in range(batch_size):
+        node_mask[i, 0:nodesxsample[i]] = 1
+    
+    datas = []
+    num_atom = len(dataset_info['atom_decoder'])+1
+
+
+    for i,n_particles in enumerate(nodesxsample):
+        atom_type = torch.randn(n_particles, num_atom)
+        pos = torch.randn(n_particles, 3)
+        rows, cols = [], []
+        for i in range(n_particles):
+            for j in range(i + 1, n_particles):
+                rows.append(i)
+                cols.append(j)
+                rows.append(j)
+                cols.append(i)
+        rows = torch.LongTensor(rows).unsqueeze(0)
+        cols = torch.LongTensor(cols).unsqueeze(0)
+        adj = torch.cat([rows, cols], dim=0)
+        data = Data(x=atom_type,edge_index=adj,pos=pos)
+        datas.append(data)
+
+    batch = Batch.from_data_list(datas).to(device)
+    context = context.index_select(0, batch.batch)
+
+    pos_gen, pos_gen_traj, atom_type_list, atom_traj = model.langevin_dynamics_sample(
+            atom_type=batch.x,
+            pos_init=batch.pos,
+            bond_index=batch.edge_index,
+            bond_type=None,
+            batch=batch.batch,
+            num_graphs=batch.num_graphs,
+            context=context,
+            extend_order=False, # Done in transforms.
+            n_steps=args.n_steps,
+            step_lr=1e-6, #1e-6
+            w_global_pos=args.w_global_pos,
+            w_global_node=args.w_global_node,
+            w_local_pos=args.w_local_pos,
+            w_local_node=args.w_local_node, 
+            global_start_sigma=args.global_start_sigma,
+            clip=args.clip,
+            clip_local=clip_local,
+            sampling_type=args.sampling_type,
+            eta=args.eta,
+            
+        )
+    pos_list = unbatch(pos_gen, batch.batch)
+    atom_list = unbatch(F.one_hot(torch.argmax(atom_type_list[:,:-1], dim=1), 5), batch.batch)
+    # for m in range(batch_size):
+    #     pos = pos_list[m]
+    #     atom_type = atom_list[m]
+    #     atom_type = torch.argmax(atom_type, dim=1)
+    #     mol = build_molecule(pos, atom_type, dataset_info)
+    #     smile = mol2smiles(mol)
+    #     print(smile)
+    pos_list_pad = padding(pos_list, max_n_nodes)
+    atom_list_pad = padding(atom_list, max_n_nodes)
+    return pos_list_pad, atom_list_pad, node_mask
+
+
+class DiffusionDataloader:
+    def __init__(self, args, model, nodes_dist, prop_dist, device, dataset_info, unkown_labels=False,
+                 batch_size=1, iterations=200):
+
+        self.args = args
+        self.model = model
+        self.nodes_dist = nodes_dist
+        self.prop_dist = prop_dist
+        self.batch_size = batch_size
+        self.iterations = iterations
+        self.device = device
+        self.unkown_labels = unkown_labels
+        self.dataset_info = dataset_info
+        self.i = 0
+
+    def __iter__(self):
+        return self
+
+    def sample(self):
+        nodesxsample = self.nodes_dist.sample(self.batch_size)
+        context = self.prop_dist.sample_batch(nodesxsample).to(self.device)
+ 
+        pos, atom_type, node_mask = sample(self.args, self.device, self.model,
+                                                self.dataset_info, self.prop_dist, nodesxsample=nodesxsample,
+                                                context=context)
+        
+        bs, n_nodes = node_mask.size()
+        edge_mask = node_mask.unsqueeze(1) * node_mask.unsqueeze(2)
+        diag_mask = ~torch.eye(edge_mask.size(1), dtype=torch.bool).unsqueeze(0)
+        diag_mask = diag_mask
+        edge_mask *= diag_mask
+        edge_mask = edge_mask.view(bs * n_nodes * n_nodes, 1).to(self.device)
+
+        context = context.squeeze(1)
+
+
+        prop_key = self.prop_dist.properties[0]
+        if self.unkown_labels:
+            context[:] = self.prop_dist.normalizer[prop_key]['mean']
+        else:
+            context = context * self.prop_dist.normalizer[prop_key]['mad'] + self.prop_dist.normalizer[prop_key]['mean']
+        data = {
+            'positions': pos.detach(),
+            'one_hot': atom_type.detach(),
+            'atom_mask': node_mask.detach(),
+            'edge_mask': edge_mask.detach(),
+            prop_key: context.detach()
+        }
+        return data
+
+    def __next__(self):
+        if self.i < self.iterations:
+            self.i += 1
+            return self.sample()
+        else:
+            self.i = 0
+            raise StopIteration
+
+    def __len__(self):
+        return self.iterations
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', type=str, default='qm9',
-                        help='qm9, geom')
+                    help='qm9, geom')
     parser.add_argument('--ckpt', type=str, help='path for loading the checkpoint')
-
+    parser.add_argument('--classifiers_path', type=str, default='qm9/property_prediction/outputs/exp_class_alpha_pretrained')
+    parser.add_argument('--save_traj', action='store_true', default="/apdcephfs/private_layneyhuang/MDM/logs/model/checkpoint/drugs_default.pt",
+                    help='whether store the whole trajectory for sampling')
+    parser.add_argument('--debug_break', type=eval, default=False,
+                        help='break point or not')
+    parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('--tag', type=str, default='')
-    parser.add_argument('--test_set', type=str, default=None)
     parser.add_argument('--out_dir', type=str, default=None)
     parser.add_argument('--device', type=str, default='cuda')
-    parser.add_argument("--context", nargs='+', default=[],
-                        help='arguments : homo | lumo | alpha | gap | mu | Cv')
-    parser.add_argument('--num_samples', type=int, default=100)
-    parser.add_argument('--batch_size', type=int, default=100)
-    parser.add_argument('--save_sdf', type=bool, default=True)
-    parser.add_argument('--quality_sampling', type=bool, default=True,
-                        help='quality sampling for visualization in Figure 4, else validity sampling for Table 2')
     parser.add_argument('--clip', type=float, default=1000.0)
-    parser.add_argument('--n_steps', type=int, default=1000,
-                        help='sampling num steps; for DSM framework, this means num steps for each noise scale')
+    parser.add_argument('--n_steps', type=int, default=5000,
+                    help='sampling num steps; for DSM framework, this means num steps for each noise scale')
     parser.add_argument('--global_start_sigma', type=float, default=float('inf'),
-                        help='enable global gradients only when noise is low')
+                    help='enable global gradients only when noise is low')
     parser.add_argument('--local_start_sigma', type=float, default=float('inf'),
-                        help='enable local gradients only when noise is low')
+                    help='enable local gradients only when noise is low')
     parser.add_argument('--w_global_pos', type=float, default=1.0,
-                        help='weight for global gradients')
+                    help='weight for global gradients')
     parser.add_argument('--w_local_pos', type=float, default=1.0,
-                        help='weight for local gradients')
+                    help='weight for local gradients')
     parser.add_argument('--w_global_node', type=float, default=1.0,
-                        help='weight for global gradients')
+                    help='weight for global gradients')
     parser.add_argument('--w_local_node', type=float, default=1.0,
-                        help='weight for local gradients')
+                    help='weight for local gradients')
+    parser.add_argument('--batch_size', type=int, default=500,
+                        help='break point or not')
+    parser.add_argument('--iterations', type=int, default=20,
+                        help='break point or not')
     # Parameters for DDPM
     parser.add_argument('--sampling_type', type=str, default='ld',
-                        help='generalized, ddpm_noisy, ld: sampling method for DDIM, DDPM or Langevin Dynamics')
+                    help='generalized, ddpm_noisy, ld: sampling method for DDIM, DDPM or Langevin Dynamics')
     parser.add_argument('--eta', type=float, default=1.0,
-                        help='weight for DDIM and DDPM: 0->DDIM, 1->DDPM')
+                    help='weight for DDIM and DDPM: 0->DDIM, 1->DDPM')
     args = parser.parse_args()
 
+    # Load checkpoint
+    args.ckpt = 'logs/qm9_full_temb_charge_norm_edmdataset_Gshnet_context_alpha_test_2023_12_29__10_25_33/checkpoints/300.pt'
+    args.classifiers_path = 'qm9/property_prediction/outputs/exp_class_alpha/'
     ckpt = torch.load(args.ckpt)
     args.dataset = 'qm9' if 'qm9' in args.ckpt else 'geom'
     config = ckpt['config']
@@ -84,8 +235,8 @@ if __name__ == '__main__':
     log_dir = os.path.dirname(os.path.dirname(args.ckpt))
 
     args.sampling_type = 'generalized'
-    args.eta = 1
-    args.global_start_sigma = 0.5  # float('inf')
+    args.eta=1
+    args.global_start_sigma = 0.5 # float('inf')
     # args.local_start_sigma = 1
     args.n_steps = ckpt['config'].model.num_diffusion_timesteps
 
@@ -93,234 +244,83 @@ if __name__ == '__main__':
     args.w_global_node = 0.5
     args.w_local_pos = 1
     args.w_local_node = 3
-
-    # data_list
-    dataset_info = get_dataset_info(args.dataset, False)
-    num_samples = args.num_samples
-    batch_size = args.batch_size
-    data_list, _ = construct_dataset(num_samples, batch_size, dataset_info)
-    transforms = Compose([CountNodesPerGraph(), GetAdj(), AtomFeat(dataset_info['atom_index'])])
-    if args.dataset == 'qm9':
-        train_set = QM93D('train', pre_transform=transforms)
-        split_idx = train_set.get_half_split(train_set.data.y.size(0), 'qm9_second_half')
-        train_set = train_set[split_idx]
-        val_set = QM93D('valid', pre_transform=transforms)
-        val_loader = DataLoader(val_set, config.train.batch_size, shuffle=False)
-    elif args.dataset == 'geom':
-        train_set = Geom(pre_transform=transforms)
-    else:
-        raise Exception('Wrong dataset name')
-    train_loader = inf_iterator(DataLoader(train_set, batch_size, shuffle=True))
-
     # Logging
-    TAG = 'result'
-    if num_samples < 10000:
-        tag = 'test'
-    output_dir = get_new_log_dir(log_dir, args.sampling_type + "_vae_N(1)_" + tag, tag=args.tag)
-    logger = get_logger('test')
+    output_dir = get_new_log_dir(log_dir, args.sampling_type+'_test', tag=args.tag)
+    logger = get_logger('test', output_dir)
     logger.info(args)
 
-    # Model
+    # Model (BDPM)
     logger.info('Building model...')
-    logger.info(ckpt['config'].model['network'])
     model = get_model(ckpt['config'].model).to(args.device)
     model.load_state_dict(ckpt['model'])
     print(ckpt['config'].model)
-
+    
     model.eval()
 
     sa_list = []
+
     valid = 0
     smile_list = []
     results = []
-    sum_rmsd = 0
 
     clip_local = None
     stable = 0
-    logger.info('dataset:%s' % args.dataset)
-    logger.info('sample num:%d' % num_samples)
-    logger.info('sample method:%s' % args.sampling_type)
-    logger.info('w_global_pos:%.1f' % args.w_global_pos)
-    logger.info('w_global_node:%.1f' % args.w_global_node)
-    logger.info('w_local_pos:%.1f' % args.w_local_pos)
-    logger.info('w_local_node:%.1f' % args.w_local_node)
-    show_detail = False
+    logger.info('dataset:%s'%args.dataset)
+    # logger.info('sample num:%d'%num_samples)
+    logger.info('sample method:%s'%args.sampling_type)
+    logger.info('w_global_pos:%.1f'%args.w_global_pos)
+    logger.info('w_global_node:%.1f'%args.w_global_node)
+    logger.info('w_local_pos:%.1f'%args.w_local_pos)
+    logger.info('w_local_node:%.1f'%args.w_local_node)
+    show_detail = True
+    
+    dataset_info = get_dataset_info(args.dataset, False)
+    histogram = dataset_info['n_nodes']
+    nodes_dist = DistributionNodes(histogram)
 
+    prop_dist = None
+
+    transforms = Compose([CountNodesPerGraph(), GetAdj(), AtomFeat(dataset_info['atom_index'])])
+    train_set = QM93D('train', condition=None, pre_transform=transforms)
+    split_idx = train_set.get_half_split(train_set.data.y.size(0), 'qm9_second_half')
+    train_set = train_set[split_idx]
+    dataloader_train = DataLoader(train_set, 256, shuffle=False)
+
+    args.context = ['alpha']
+    property_norms = compute_mean_mad(dataloader_train, args.context, args.dataset)
+    mean, mad = property_norms[args.context[0]]['mean'], property_norms[args.context[0]]['mad']
+
+    
+    # print(mean)
+    # print(mad)
+
+    # exit()
+
+
+    # conditioning = ['alpha']
+    prop_dist = DistributionProperty(dataloader_train, args.context)
+    if prop_dist is not None:
+        prop_dist.set_normalizer(property_norms)
+    diffusion_dataloader = DiffusionDataloader(args, model, nodes_dist, prop_dist,
+                                                args.device, dataset_info, batch_size=args.batch_size, iterations=args.iterations)
+    # for batch in diffusion_dataloader:
+    #     print(batch['positions'].size())
+    #     print(batch['one_hot'].size())
+    classifier = get_classifier(args.classifiers_path).to(args.device)
+    print("MDM: We evaluate the classifier on our generated samples")
+    loss = test(classifier, 0, diffusion_dataloader, mean, mad, args.context[0], args.device, 1, args.debug_break)
+    print("Loss classifier on Generated samples: %.4f" % loss)
     position_list = []
     atom_type_list = []
     mols_dict = []
 
-    args.context = ['gap']
-    context_value = ['validity sampling']
-    if len(args.context) > 0:
-        property_norms = compute_mean_mad(train_set, args.context, args.dataset)
-        mean, mad, max_v, min_v = property_norms[args.context[0]]['mean'], property_norms[args.context[0]]['mad'], \
-                                  property_norms[args.context[0]]['max'], property_norms[args.context[0]]['min']
-        if args.quality_sampling:
-            context_value = torch.tensor(np.arange(0.05, 0.38, 0.02))
-        else:
-            prop_dist = DistributionProperty(dataloader_train, args.context)
-            if prop_dist is not None:
-                prop_dist.set_normalizer(property_norms)
+    
 
-    for c in context_value:
-        if args.quality_sampling:
-            c_norm = (c - mean) / mad
-            context = torch.tensor([c_norm] * batch_size).to(args.device)
-        else:
-            context = prop_dist.sample_batch(nodesxsample_list[n]).to(args.device)
-        for n, datas in enumerate(tqdm(data_list)):
-            with torch.no_grad():
-                start_time = time.time()
-                batch = Batch.from_data_list(datas).to(args.device)
+       
 
-                try:
-                    pos_gen, pos_gen_traj, atom_type, atom_traj = model.langevin_dynamics_sample(
-                        atom_type=batch.x,
-                        # atom_type = batch.atom_feat_full.float(),
-                        pos_init=batch.pos,
-                        bond_index=batch.edge_index,
-                        bond_type=None,
-                        batch=batch.batch,
-                        num_graphs=batch.num_graphs,
-                        extend_order=False,  # Done in transforms.
-                        n_steps=args.n_steps,
-                        step_lr=1e-6,  # 1e-6
-                        w_global_pos=args.w_global_pos,
-                        w_global_node=args.w_global_node,
-                        w_local_pos=args.w_local_pos,
-                        w_local_node=args.w_local_node,
-                        global_start_sigma=args.global_start_sigma,
-                        clip=args.clip,
-                        clip_local=clip_local,
-                        sampling_type=args.sampling_type,
-                        eta=args.eta,
-                        context=context
+        
+ 
 
-                    )
 
-                    pos_list = unbatch(pos_gen, batch.batch)
-                    atom_list = unbatch(atom_type, batch.batch)
-                    current_num_samples = (n + 1) * batch_size
-                    secs_per_sample = (time.time() - start_time) / current_num_samples
-                    print('\t %d/%d Molecules generated at %.2f secs/sample' % (
-                        current_num_samples, num_samples, secs_per_sample))
-                    for m in range(batch_size):
-                        pos = pos_list[m]
-                        atom_type = atom_list[m]
-
-                        # charge
-                        atom_type = atom_type[:, :-1]
-                        charge = atom_type[:, -1]
-
-                        atom_type = torch.argmax(atom_type, dim=1)
-                        position_list.append(pos.cpu().detach())
-                        atom_type_list.append(atom_type.cpu().detach())
-
-                        a = 0
-
-                        mol = build_molecule(pos, atom_type, dataset_info)
-                        smile = mol2smiles(mol)
-                        ptable = Chem.GetPeriodicTable()
-                        atom_decoder = dataset_info['atom_decoder']
-                        atom_type = [atom_decoder[i] for i in atom_type]
-                        atom_type = [ptable.GetAtomicNumber(i.capitalize()) for i in atom_type]
-                        gap = compute_prop(atom_type, pos.cpu().numpy(), args.context[0])
-                        print(gap)
-                        if show_detail:
-                            print("generated smile:", smile)
-                        result = {'atom_type': atom_type, 'pos': pos, 'smile': smile}
-                        results.append(result)
-                        if smile is not None:
-                            valid += 1
-                            stable_flag = False
-                            if "." not in smile:
-                                stable += 1
-                                stable_flag = True
-
-                            mol_frags = Chem.rdmolops.GetMolFrags(mol, asMols=True)
-                            largest_mol = max(mol_frags, default=mol, key=lambda m: m.GetNumAtoms())
-                            smile = mol2smiles(largest_mol)
-                            smile_list.append(smile)
-
-                            if args.save_sdf:
-                                conf = Chem.Conformer(mol.GetNumAtoms())
-                                for i in range(mol.GetNumAtoms()):
-                                    conf.SetAtomPosition(i, (float(pos[i][0]), float(pos[i][1]), float(pos[i][2])))
-                                mol.AddConformer(conf)
-                                sdf_dir = './results/conditioned/{}/molecule_{}'.format(args.context[0],
-                                                                                        'with_value')
-                                if not os.path.exists(sdf_dir):
-                                    os.mkdir(sdf_dir)
-                                # writer = Chem.SDWriter(os.path.join(sdf_dir, '%s.sdf' % 'full_{}_{}'.format(n,m)))
-                                writer = Chem.SDWriter(os.path.join(sdf_dir, '%s.sdf' % 'full_{}_{}_{}'.format(
-                                    args.context[0], c.item(), gap)))
-                                # print('%s.sdf' % 'full_{}_{}'.format(n,m))
-                                writer.write(mol, confId=0)
-                                writer.close()
-                    break
-
-                except FloatingPointError:
-                    clip_local = 10
-                    logger.warning('Retrying with local clipping.')
-                    raise Exception('Nan in position')
-
-                print('----------------------------')
-                # print('diversity:', diversity(smile_list))
-                logger.info("The %dth validity:%.4f" % (n + 1, valid / ((n + 1) * batch_size)))
-                logger.info("The %dth stable:%.4f" % (n + 1, stable / ((n + 1) * batch_size)))
-                logger.info("The %dth Uniq:%.4f" % (n + 1, len(set(smile_list)) / ((n + 1) * batch_size)))
-
-                print('----------------------------')
-
-    validity_dict = analyze_stability_for_molecules(position_list, atom_type_list, dataset_info)
-    print(validity_dict)
-    print("Final validity:", valid / num_samples)
-    print("Final stable:", stable / num_samples)
-    print("Final unique:", len(set(smile_list)) / num_samples)
-    print(len(set(smile_list)) / valid)
-    logger.info("Final validity:%.4f" % (valid / num_samples))
-    logger.info("Final stable:%.4f" % (stable / num_samples))
-    logger.info("Final unique:%.4f" % (len(set(smile_list)) / num_samples))
-
-    uniq = list(set(smile_list))
-
-    if args.dataset == 'qm9':
-        dataset_smile_list = retrieve_qm9_smiles()
-    else:
-        dataset_smile_list = retrieve_geom_smiles()
-
-    novel = []
-    for smile in uniq:
-        if smile not in dataset_smile_list:
-            novel.append(smile)
-            # print(smile)
-        # else:
-        #     print()
-    print(len(novel))
-    novelty = len(novel) / len(uniq)
-    logger.info("Final novelty:%.4f" % novelty)
-
-    save = True
-    if num_samples == 10000:
-        save = True
-    if save:
-        save_path = os.path.join(output_dir, 'samples_all.pkl')
-        logger.info('Saving samples to: %s' % save_path)
-
-        save_smile_path = os.path.join(output_dir, 'samples_smile.pkl')
-
-        with open(save_path, 'wb') as f:
-            pickle.dump(results, f)
-
-        with open(save_smile_path, 'wb') as f:
-            pickle.dump(smile_list, f)
-
-    # diversity_score = diversity(list(set(smile_list)))
-    # logger.info("Final similar score in uniqueness list:%.4f" % (diversity_score))
-    # print(diversity_score)
-
-    # import pandas as pd
-    # name = ['smiles']
-    # smiles = pd.DataFrame(columns=name,data=list(set(smile_list)))
-    # smiles.to_csv('./MDM6x4_GEOM_100_smiles_list_bondTure2_531.csv',encoding='utf-8')
+    
+    
