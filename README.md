@@ -6,7 +6,7 @@
 
 ## 📢 News
 
-- If you would like to generate molecules based on the protein pocket structure, please refer to our new paper ['PMDM'](https://github.com/Layne-Huang/PMDM) which is recently accepted by **Nature Communications** !!
+- If you are interested in generating molecules based on the protein pocket structure, please refer to our new paper ['PMDM'](https://github.com/Layne-Huang/PMDM) which is recently accepted by **Nature Communications** !!
 
 ## Dependencies
 
